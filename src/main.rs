@@ -5,7 +5,7 @@ use std::{
     thread,
 };
 
-use chrono::Local;
+use chrono::{Duration, Local};
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, RichText, TextEdit};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -62,6 +62,8 @@ fn setup_korean_fonts(ctx: &egui::Context) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Write,
+    Research,
+    Preview,
     Accounts,
     Log,
 }
@@ -153,12 +155,47 @@ impl Default for AiConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResearchConfig {
+    naver_datalab_client_id: String,
+    naver_datalab_client_secret: String,
+    keywords: String,
+    start_date: String,
+    end_date: String,
+    time_unit: String,
+    device: String,
+    gender: String,
+}
+
+impl Default for ResearchConfig {
+    fn default() -> Self {
+        let end = Local::now().date_naive() - Duration::days(1);
+        let start = end - Duration::days(14);
+        Self {
+            naver_datalab_client_id: String::new(),
+            naver_datalab_client_secret: String::new(),
+            keywords: "AI 글쓰기,블로그 자동화,네이버 블로그,티스토리".to_owned(),
+            start_date: start.format("%Y-%m-%d").to_string(),
+            end_date: end.format("%Y-%m-%d").to_string(),
+            time_unit: "date".to_owned(),
+            device: String::new(),
+            gender: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SavedState {
+    #[serde(default)]
     draft: Draft,
+    #[serde(default)]
     naver: NaverConfig,
+    #[serde(default)]
     tistory: TistoryConfig,
+    #[serde(default)]
     ai: AiConfig,
+    #[serde(default)]
+    research: ResearchConfig,
 }
 
 #[derive(Debug)]
@@ -168,6 +205,7 @@ enum WorkerResult {
     NaverToken(Result<TokenResponse, String>),
     NaverRefresh(Result<TokenResponse, String>),
     AiGenerated(Result<Draft, String>),
+    TrendAnalyzed(Result<Vec<TrendRanking>, String>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -180,12 +218,23 @@ struct TokenResponse {
     error_description: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct TrendRanking {
+    keyword: String,
+    latest_score: f64,
+    previous_score: f64,
+    growth: f64,
+    average_score: f64,
+}
+
 struct BlogWriterApp {
     active_tab: Tab,
     draft: Draft,
     naver: NaverConfig,
     tistory: TistoryConfig,
     ai: AiConfig,
+    research: ResearchConfig,
+    trend_rankings: Vec<TrendRanking>,
     auth_code: String,
     auth_state: String,
     status: String,
@@ -202,6 +251,8 @@ impl BlogWriterApp {
             naver: saved.naver,
             tistory: saved.tistory,
             ai: saved.ai,
+            research: saved.research,
+            trend_rankings: Vec::new(),
             auth_code: String::new(),
             auth_state: String::new(),
             status: "준비됨".to_owned(),
@@ -261,6 +312,17 @@ impl BlogWriterApp {
                                 );
                             }
                             Err(err) => self.set_status("AI 초안 생성 실패", err),
+                        },
+                        WorkerResult::TrendAnalyzed(result) => match result {
+                            Ok(rankings) => {
+                                let count = rankings.len();
+                                self.trend_rankings = rankings;
+                                self.set_status(
+                                    "키워드 리서치 완료",
+                                    format!("{count}개 키워드를 분석했습니다."),
+                                );
+                            }
+                            Err(err) => self.set_status("키워드 리서치 실패", err),
                         },
                     }
                 }
@@ -385,6 +447,44 @@ impl BlogWriterApp {
         self.start_worker(move || WorkerResult::AiGenerated(generate_ai_draft(&ai)));
     }
 
+    fn analyze_keyword_trends(&mut self) {
+        let research = self.research.clone();
+        if research.naver_datalab_client_id.trim().is_empty()
+            || research.naver_datalab_client_secret.trim().is_empty()
+        {
+            self.set_status(
+                "검증 실패",
+                "네이버 Search Trend API Client ID와 Secret이 필요합니다.",
+            );
+            return;
+        }
+        if research_keywords(&research).is_empty() {
+            self.set_status("검증 실패", "조회할 후보 키워드를 입력하세요.");
+            return;
+        }
+
+        self.start_worker(move || WorkerResult::TrendAnalyzed(analyze_keyword_trends(&research)));
+    }
+
+    fn use_top_keyword_for_ai(&mut self) {
+        let Some(top) = self.trend_rankings.first() else {
+            self.set_status("키워드 반영 실패", "먼저 키워드 리서치를 실행하세요.");
+            return;
+        };
+        self.ai.topic = format!("{}에 대한 실용 가이드", top.keyword);
+        self.ai.keywords = self
+            .trend_rankings
+            .iter()
+            .take(5)
+            .map(|ranking| ranking.keyword.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        self.set_status(
+            "키워드 반영 완료",
+            "상위 키워드를 AI 초안 설정에 넣었습니다.",
+        );
+    }
+
     fn copy_to_clipboard(&mut self, ctx: &egui::Context, label: &str, value: String) {
         ctx.copy_text(value);
         self.set_status("클립보드 복사", label);
@@ -396,6 +496,7 @@ impl BlogWriterApp {
             naver: self.naver.clone(),
             tistory: self.tistory.clone(),
             ai: self.ai.clone(),
+            research: self.research.clone(),
         };
         match save_state(&state) {
             Ok(path) => self.set_status("저장 완료", path.display().to_string()),
@@ -408,6 +509,11 @@ impl BlogWriterApp {
             Ok(path) => self.set_status("HTML 내보내기 완료", path.display().to_string()),
             Err(err) => self.set_status("HTML 내보내기 실패", err),
         }
+    }
+
+    fn reset_draft(&mut self) {
+        self.draft = Draft::default();
+        self.set_status("초안 초기화", "기본 초안으로 되돌렸습니다.");
     }
 
     fn open_tistory_editor(&mut self) {
@@ -444,6 +550,8 @@ impl eframe::App for BlogWriterApp {
 
         ui.horizontal(|ui| {
             tab_button(ui, &mut self.active_tab, Tab::Write, "작성");
+            tab_button(ui, &mut self.active_tab, Tab::Research, "리서치");
+            tab_button(ui, &mut self.active_tab, Tab::Preview, "미리보기");
             tab_button(ui, &mut self.active_tab, Tab::Accounts, "계정");
             tab_button(ui, &mut self.active_tab, Tab::Log, "로그");
             ui.separator();
@@ -458,6 +566,8 @@ impl eframe::App for BlogWriterApp {
 
         match self.active_tab {
             Tab::Write => self.write_tab(ui, &ctx),
+            Tab::Research => self.research_tab(ui),
+            Tab::Preview => self.preview_tab(ui),
             Tab::Accounts => self.accounts_tab(ui, &ctx),
             Tab::Log => self.log_tab(ui),
         }
@@ -489,6 +599,15 @@ impl BlogWriterApp {
                 ui.selectable_value(&mut self.draft.visibility, Visibility::Private, "비공개");
                 ui.selectable_value(&mut self.draft.visibility, Visibility::Public, "발행");
             });
+            left.add_space(8.0);
+            left.horizontal(|ui| {
+                if ui.button("미리보기").clicked() {
+                    self.active_tab = Tab::Preview;
+                }
+                if ui.button("초안 초기화").clicked() {
+                    self.reset_draft();
+                }
+            });
 
             let right = &mut columns[1];
             right.heading("AI 초안");
@@ -502,6 +621,14 @@ impl BlogWriterApp {
                 ui.text_edit_singleline(&mut self.ai.keywords);
                 ui.label("톤");
                 ui.text_edit_singleline(&mut self.ai.tone);
+                ui.horizontal(|ui| {
+                    if ui.button("키워드 리서치").clicked() {
+                        self.active_tab = Tab::Research;
+                    }
+                    if ui.button("상위 키워드 반영").clicked() {
+                        self.use_top_keyword_for_ai();
+                    }
+                });
                 if ui
                     .add_enabled(self.worker.is_none(), egui::Button::new("AI 글 생성"))
                     .clicked()
@@ -566,6 +693,146 @@ impl BlogWriterApp {
                 ui.label(format!("본문 길이: {}자", self.draft.body.chars().count()));
                 ui.label(format!("태그: {}", normalize_tags(&self.draft.tags)));
                 ui.label(format!("공개 상태: {}", self.draft.visibility.label()));
+            });
+        });
+    }
+
+    fn research_tab(&mut self, ui: &mut egui::Ui) {
+        ui.columns(2, |columns| {
+            let left = &mut columns[0];
+            left.heading("키워드 리서치");
+            left.add_space(8.0);
+            left.label("네이버 Search Trend Client ID");
+            left.text_edit_singleline(&mut self.research.naver_datalab_client_id);
+            left.label("네이버 Search Trend Client Secret");
+            left.add(
+                TextEdit::singleline(&mut self.research.naver_datalab_client_secret).password(true),
+            );
+            left.add_space(8.0);
+            left.label("후보 키워드");
+            left.add(
+                TextEdit::multiline(&mut self.research.keywords)
+                    .desired_rows(5)
+                    .hint_text("쉼표 또는 줄바꿈으로 최대 5개"),
+            );
+            left.add_space(8.0);
+            left.horizontal(|ui| {
+                ui.label("기간");
+                ui.text_edit_singleline(&mut self.research.start_date);
+                ui.label("~");
+                ui.text_edit_singleline(&mut self.research.end_date);
+            });
+            left.horizontal(|ui| {
+                ui.label("단위");
+                ui.selectable_value(&mut self.research.time_unit, "date".to_owned(), "일");
+                ui.selectable_value(&mut self.research.time_unit, "week".to_owned(), "주");
+                ui.selectable_value(&mut self.research.time_unit, "month".to_owned(), "월");
+            });
+            left.horizontal(|ui| {
+                ui.label("기기");
+                ui.selectable_value(&mut self.research.device, String::new(), "전체");
+                ui.selectable_value(&mut self.research.device, "pc".to_owned(), "PC");
+                ui.selectable_value(&mut self.research.device, "mo".to_owned(), "모바일");
+            });
+            left.horizontal(|ui| {
+                ui.label("성별");
+                ui.selectable_value(&mut self.research.gender, String::new(), "전체");
+                ui.selectable_value(&mut self.research.gender, "m".to_owned(), "남성");
+                ui.selectable_value(&mut self.research.gender, "f".to_owned(), "여성");
+            });
+            left.add_space(8.0);
+            left.horizontal(|ui| {
+                if ui
+                    .add_enabled(self.worker.is_none(), egui::Button::new("트렌드 조회"))
+                    .clicked()
+                {
+                    self.analyze_keyword_trends();
+                }
+                if ui.button("상위 키워드 AI에 반영").clicked() {
+                    self.use_top_keyword_for_ai();
+                }
+            });
+
+            let right = &mut columns[1];
+            right.heading("분석 결과");
+            right.add_space(8.0);
+            if self.trend_rankings.is_empty() {
+                right.label("후보 키워드를 조회하면 최근 점수와 상승폭 기준으로 정렬합니다.");
+            } else {
+                egui::Grid::new("trend_rankings_grid")
+                    .striped(true)
+                    .num_columns(5)
+                    .show(right, |ui| {
+                        ui.strong("순위");
+                        ui.strong("키워드");
+                        ui.strong("최근");
+                        ui.strong("직전");
+                        ui.strong("상승폭");
+                        ui.end_row();
+
+                        for (index, ranking) in self.trend_rankings.iter().enumerate() {
+                            ui.label(format!("{}", index + 1));
+                            ui.label(&ranking.keyword);
+                            ui.label(format!("{:.1}", ranking.latest_score));
+                            ui.label(format!("{:.1}", ranking.previous_score));
+                            ui.label(format!("{:+.1}", ranking.growth));
+                            ui.end_row();
+                        }
+                    });
+            }
+            right.add_space(12.0);
+            right.group(|ui| {
+                ui.heading("자동화 흐름");
+                ui.label("1. 후보 키워드를 넣고 트렌드 조회");
+                ui.label("2. 상승폭이 큰 키워드를 AI 주제/키워드에 반영");
+                ui.label("3. 작성 탭에서 AI 글 생성 후 미리보기와 발행");
+            });
+        });
+    }
+
+    fn preview_tab(&mut self, ui: &mut egui::Ui) {
+        ui.columns(2, |columns| {
+            let left = &mut columns[0];
+            left.heading("발행 미리보기");
+            left.add_space(8.0);
+            egui::ScrollArea::vertical().show(left, |ui| {
+                ui.heading(self.draft.title.trim());
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(self.draft.visibility.label()).strong());
+                    for tag in normalized_tag_list(&self.draft.tags) {
+                        ui.label(format!("#{tag}"));
+                    }
+                });
+                ui.separator();
+                render_html_preview(ui, &self.draft.body);
+            });
+
+            let right = &mut columns[1];
+            right.heading("검토 체크");
+            right.add_space(8.0);
+            right.group(|ui| {
+                ui.label(format!("제목: {}자", self.draft.title.chars().count()));
+                ui.label(format!(
+                    "본문: {}자",
+                    plain_text_from_html(&self.draft.body).chars().count()
+                ));
+                ui.label(format!(
+                    "태그 수: {}개",
+                    normalized_tag_list(&self.draft.tags).len()
+                ));
+                ui.label(format!("공개 상태: {}", self.draft.visibility.label()));
+            });
+
+            right.add_space(12.0);
+            right.group(|ui| {
+                ui.heading("빠른 작업");
+                if ui.button("작성으로 돌아가기").clicked() {
+                    self.active_tab = Tab::Write;
+                }
+                if ui.button("HTML 파일 내보내기").clicked() {
+                    self.export_html();
+                }
             });
         });
     }
@@ -659,6 +926,126 @@ fn tab_button(ui: &mut egui::Ui, active: &mut Tab, tab: Tab, label: &str) {
     if ui.selectable_label(*active == tab, label).clicked() {
         *active = tab;
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewBlockKind {
+    Heading2,
+    Heading3,
+    Paragraph,
+    ListItem,
+}
+
+#[derive(Debug, Clone)]
+struct PreviewBlock {
+    kind: PreviewBlockKind,
+    text: String,
+}
+
+fn render_html_preview(ui: &mut egui::Ui, html: &str) {
+    let blocks = html_preview_blocks(html);
+    if blocks.is_empty() {
+        ui.label("미리보기할 본문이 없습니다.");
+        return;
+    }
+
+    for block in blocks {
+        match block.kind {
+            PreviewBlockKind::Heading2 => {
+                ui.add_space(10.0);
+                ui.heading(block.text);
+            }
+            PreviewBlockKind::Heading3 => {
+                ui.add_space(8.0);
+                ui.label(RichText::new(block.text).strong().size(18.0));
+            }
+            PreviewBlockKind::Paragraph => {
+                ui.add_space(4.0);
+                ui.label(block.text);
+            }
+            PreviewBlockKind::ListItem => {
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("•");
+                    ui.label(block.text);
+                });
+            }
+        }
+    }
+}
+
+fn html_preview_blocks(html: &str) -> Vec<PreviewBlock> {
+    let normalized = html
+        .replace("<h2", "\n<h2")
+        .replace("</h2>", "</h2>\n")
+        .replace("<h3", "\n<h3")
+        .replace("</h3>", "</h3>\n")
+        .replace("<p", "\n<p")
+        .replace("</p>", "</p>\n")
+        .replace("<li", "\n<li")
+        .replace("</li>", "</li>\n")
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
+
+    normalized
+        .lines()
+        .filter_map(|line| preview_block_from_line(line.trim()))
+        .collect()
+}
+
+fn preview_block_from_line(line: &str) -> Option<PreviewBlock> {
+    if line.is_empty() || line == "<ul>" || line == "</ul>" {
+        return None;
+    }
+
+    let kind = if line.starts_with("<h2") {
+        PreviewBlockKind::Heading2
+    } else if line.starts_with("<h3") {
+        PreviewBlockKind::Heading3
+    } else if line.starts_with("<li") {
+        PreviewBlockKind::ListItem
+    } else {
+        PreviewBlockKind::Paragraph
+    };
+    let text = decode_html_entities(&strip_html_tags(line));
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(PreviewBlock { kind, text })
+    }
+}
+
+fn plain_text_from_html(html: &str) -> String {
+    html_preview_blocks(html)
+        .into_iter()
+        .map(|block| block.text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn strip_html_tags(value: &str) -> String {
+    let mut output = String::new();
+    let mut in_tag = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    output.trim().to_owned()
+}
+
+fn decode_html_entities(value: &str) -> String {
+    value
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
 }
 
 fn naver_authorize_url(naver: &NaverConfig, state: &str) -> String {
@@ -797,6 +1184,126 @@ fn draft_from_ai_json(text: &str) -> Result<Draft, String> {
     })
 }
 
+fn analyze_keyword_trends(research: &ResearchConfig) -> Result<Vec<TrendRanking>, String> {
+    let keywords = research_keywords(research);
+    if keywords.is_empty() {
+        return Err("조회할 후보 키워드가 없습니다.".to_owned());
+    }
+    if keywords.len() > 5 {
+        return Err(
+            "네이버 Search Trend API는 한 번에 최대 5개 키워드 그룹만 비교합니다.".to_owned(),
+        );
+    }
+
+    let keyword_groups = keywords
+        .iter()
+        .map(|keyword| {
+            json!({
+                "groupName": keyword,
+                "keywords": [keyword],
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut request_body = json!({
+        "startDate": research.start_date.trim(),
+        "endDate": research.end_date.trim(),
+        "timeUnit": research.time_unit.trim(),
+        "keywordGroups": keyword_groups,
+    });
+
+    if let Some(body) = request_body.as_object_mut() {
+        if !research.device.trim().is_empty() {
+            body.insert("device".to_owned(), json!(research.device.trim()));
+        }
+        if !research.gender.trim().is_empty() {
+            body.insert("gender".to_owned(), json!(research.gender.trim()));
+        }
+    }
+
+    let response = reqwest::blocking::Client::new()
+        .post("https://openapi.naver.com/v1/datalab/search")
+        .header("X-Naver-Client-Id", research.naver_datalab_client_id.trim())
+        .header(
+            "X-Naver-Client-Secret",
+            research.naver_datalab_client_secret.trim(),
+        )
+        .json(&request_body)
+        .send()
+        .map_err(|err| err.to_string())?;
+
+    let status = response.status();
+    let body = response.text().map_err(|err| err.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {body}"));
+    }
+
+    let value: Value =
+        serde_json::from_str(&body).map_err(|err| format!("응답 JSON 파싱 실패: {err}"))?;
+    let results = value
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("검색 트렌드 결과를 찾지 못했습니다: {body}"))?;
+
+    let mut rankings = Vec::new();
+    for result in results {
+        let keyword = result
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("키워드")
+            .to_owned();
+        let scores = result
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.get("ratio").and_then(Value::as_f64))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if scores.is_empty() {
+            continue;
+        }
+
+        let latest_score = *scores.last().unwrap_or(&0.0);
+        let previous_score = if scores.len() >= 2 {
+            scores[scores.len() - 2]
+        } else {
+            0.0
+        };
+        let average_score = scores.iter().sum::<f64>() / scores.len() as f64;
+        let growth = latest_score - previous_score;
+        rankings.push(TrendRanking {
+            keyword,
+            latest_score,
+            previous_score,
+            growth,
+            average_score,
+        });
+    }
+
+    rankings.sort_by(|a, b| {
+        b.growth
+            .total_cmp(&a.growth)
+            .then_with(|| b.latest_score.total_cmp(&a.latest_score))
+            .then_with(|| b.average_score.total_cmp(&a.average_score))
+    });
+
+    Ok(rankings)
+}
+
+fn research_keywords(research: &ResearchConfig) -> Vec<String> {
+    research
+        .keywords
+        .split([',', '\n'])
+        .map(str::trim)
+        .filter(|keyword| !keyword.is_empty())
+        .take(5)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn exchange_naver_token(
     naver: &NaverConfig,
     code: &str,
@@ -918,11 +1425,16 @@ fn export_html(draft: &Draft) -> Result<PathBuf, String> {
 }
 
 fn normalize_tags(tags: &str) -> String {
+    normalized_tag_list(tags).join(",")
+}
+
+fn normalized_tag_list(tags: &str) -> Vec<String> {
     tags.split(',')
         .map(str::trim)
         .filter(|tag| !tag.is_empty())
-        .collect::<Vec<_>>()
-        .join(",")
+        .map(|tag| tag.trim_start_matches('#').trim().to_owned())
+        .filter(|tag| !tag.is_empty())
+        .collect()
 }
 
 fn slugify(title: &str) -> String {
