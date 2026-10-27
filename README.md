@@ -1,50 +1,75 @@
-# Blog Writer
+# Esp32
 
-네이버 블로그와 티스토리 원고를 한 화면에서 준비하는 Rust/egui 데스크톱 앱입니다.
+# ESP32 핀맵과 개발 도구
+> 기준 보드: ESP32 DevKit / ESP32-WROOM
 
-## 지원 방식
+## 전원 & 기준 핀
+- **GND**: 모든 전기의 기준점 (공통 접지)
+- **3V3**: ESP32 동작 전압 (센서 전원용)
+- **VIN / 5V**: USB 또는 외부 5V 입력
 
-- AI 글쓰기: OpenAI Responses API로 한국어 제목, HTML 본문, 태그를 생성합니다.
-- 키워드 리서치: 네이버 Search Trend API로 후보 키워드의 최근 검색 추이와 상승폭을 비교합니다.
-- 네이버 블로그: 네이버 OAuth Access Token으로 공식 `writePost` API에 발행합니다.
-- 티스토리: 2024년 2월 Open API 종료로 직접 발행 API가 없어, 편집기 열기, 제목/본문/태그 복사, HTML 내보내기 방식으로 보조합니다.
-- 미리보기: 작성한 HTML 본문을 앱 안에서 제목, 태그, 문단, 목록 형태로 확인합니다.
+## I2C
+- **SDA**: GPIO21
+- **SCL**: GPIO22
 
-## 실행
+## SPI
+- **MOSI**: GPIO23
+- **MISO**: GPIO19
+- **SCK** : GPIO18
+- **CS**  : GPIO5
+
+## UART
+- **UART0**: GPIO1(TX), GPIO3(RX) – 업로드/로그
+- **UART2**: GPIO17(TX), GPIO16(RX) – 외부 장치
+
+## 안전한 GPIO
+GPIO 4,5,13,14,16,17,18,19,21,22,23,25,26,27,32,33
+
+## 입력 전용 GPIO
+GPIO 34,35,36,39
+
+## 부팅 주의 GPIO
+GPIO 0,2,12,15
+
+## ADC
+- ADC1: GPIO32~39 (Wi-Fi OK)
+- ADC2: Wi-Fi 사용 시 불가
+
+## Deep Sleep Wakeup GPIO
+GPIO 0,2,4,12~15,25~27,32~39
+
+## 실전 추천
+- LED: GPIO 2,4,16,17
+- 버튼: GPIO 4,27,32~39
+- 아날로그 센서: GPIO 32~36
+
+## Rust 도구와 시리얼 포트
+
+포트 목록 확인:
 
 ```bash
-cargo run
+ls /dev/cu.usb*
 ```
 
-## 네이버 설정
+확인한 포트를 지정해 보드 정보를 조회한다. 아래 포트 이름은 기존 환경의 예시다.
 
-1. 네이버 Developers에서 애플리케이션을 만들고 로그인 Open API와 블로그 권한을 설정합니다.
-2. 앱의 `계정` 탭에 Client ID, Client Secret, Redirect URI를 입력합니다.
-3. `로그인 URL 열기`를 누르고 네이버 로그인 후 redirect URL의 `code` 값을 복사합니다.
-4. `code`를 앱에 붙여넣고 `토큰 발급`을 누릅니다.
-5. `작성` 탭에서 제목, 본문 HTML, 태그, 카테고리 번호를 입력하고 `네이버 발행`을 누릅니다.
+```bash
+espflash board-info --port /dev/cu.usbserial-A5069RR4
+```
 
-## AI 글쓰기 설정
+포트를 사용 중인 프로세스 확인:
 
-1. `계정` 탭에서 OpenAI API Key를 입력합니다.
-2. 기본 모델은 `gpt-5.2`입니다. 필요하면 같은 칸에서 다른 모델명으로 바꿀 수 있습니다.
-3. `작성` 탭에서 주제, 대상 독자, 키워드, 톤을 입력하고 `AI 글 생성`을 누릅니다.
-4. 생성된 제목, HTML 본문, 태그가 작성 화면에 자동으로 채워집니다.
+```bash
+lsof | grep usbserial
+```
 
-API Key를 저장하고 싶지 않으면 앱의 API Key 칸을 비워두고 `OPENAI_API_KEY` 환경 변수를 사용하세요.
+OLED·센서 연결 메모는 [부품 배선](../peripherals/wiring.md)을 참고한다.
 
-## 키워드 리서치
 
-1. 네이버 Developers에서 Search Trend API를 사용할 수 있는 Client ID와 Client Secret을 준비합니다.
-2. `리서치` 탭에 후보 키워드를 쉼표나 줄바꿈으로 최대 5개 입력합니다.
-3. 기간, 단위, 기기, 성별 조건을 선택하고 `트렌드 조회`를 누릅니다.
-4. 상승폭 기준 상위 키워드를 `상위 키워드 AI에 반영`으로 AI 주제와 키워드에 넣습니다.
-5. `작성` 탭에서 AI 글 생성, 미리보기, 발행 흐름을 이어갑니다.
+```bash
+. ~/export-esp.sh
+cargo run --example led_blink
+cargo run --example oled
+```
 
-## 티스토리 사용
-
-1. `계정` 탭에서 티스토리 새 글쓰기 편집기 URL을 확인하거나 수정합니다.
-2. `작성` 탭에서 `편집기 열기`, `제목 복사`, `본문 복사`, `태그 복사`를 순서대로 사용합니다.
-3. 백업이나 재사용이 필요하면 `HTML 파일 내보내기`를 누릅니다.
-
-설정은 `blog_writer_config.json`, 내보낸 HTML은 `exports/`에 저장됩니다. 앱은 macOS의 `AppleSDGothicNeo` 등 한국어 시스템 폰트를 자동 등록해 egui 기본 폰트에서 깨지던 한글 표시를 보완합니다.
+기존 예제 이름은 유지했다. [ESP32 예제 목록](examples/README.md)에서 소스 위치를 확인한다.
