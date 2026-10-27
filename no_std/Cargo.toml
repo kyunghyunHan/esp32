@@ -1,0 +1,132 @@
+[package]
+edition      = "2024"
+name         = "embedded"
+rust-version = "1.88"
+version      = "0.1.0"
+autoexamples = false
+
+[dependencies]
+esp-println = { version = "^0.16.1", features = ["esp32"] }
+esp-hal = { version = "1.0.0", features = ["esp32", "unstable"] }
+
+esp-alloc = "0.9.0"
+
+critical-section = "1.2.0"
+embedded-graphics = "0.8.1"
+ssd1306 = "0.10.0"
+heapless = "0.9.2"
+smoltcp = { version = "0.12.0", default-features = false, features = [
+  "medium-ethernet",
+  "proto-ipv4",
+  "socket-tcp",
+  "socket-dhcpv4",
+] }
+nb = "1.1"
+ds323x = "0.6"
+rtcc = "0.3"
+embedded-hal-bus = "0.2"
+embedded-hal = "1.0.0"
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32"] }
+embassy-executor = "0.9.1"
+embassy-time = "0.5.0"
+esp-rtos = { version = "0.2.0", features = ["esp32", "embassy", "esp-radio"] }
+esp-radio = { version = "0.17.0", features = ["esp32", "wifi", "esp-alloc", "smoltcp", "unstable"] }
+esp-backtrace = { version = "0.18.1", features = ["esp32", "println"] }
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units    = 1     # LLVM can perform better optimizations using a single thread
+debug            = 2
+debug-assertions = false
+incremental      = false
+lto              = 'fat'
+opt-level        = 's'
+overflow-checks  = false
+
+[[example]]
+name = "button_piezo_buzzer"
+path = "examples/esp32/gpio/button_piezo_buzzer.rs"
+
+[[example]]
+name = "button_polling"
+path = "examples/esp32/gpio/button_polling.rs"
+
+[[example]]
+name = "interrupt"
+path = "examples/esp32/gpio/interrupt.rs"
+
+[[example]]
+name = "ioa"
+path = "examples/esp32/gpio/ioa.rs"
+
+[[example]]
+name = "led"
+path = "examples/esp32/gpio/led.rs"
+
+[[example]]
+name = "led_blink"
+path = "examples/esp32/gpio/led_blink.rs"
+
+[[example]]
+name = "rotary_encode"
+path = "examples/esp32/gpio/rotary_encode.rs"
+
+[[example]]
+name = "oled"
+path = "examples/esp32/display/oled.rs"
+
+[[example]]
+name = "pir"
+path = "examples/esp32/sensors/pir.rs"
+
+[[example]]
+name = "time"
+path = "examples/esp32/sensors/time.rs"
+
+[[example]]
+name = "sound"
+path = "examples/esp32/audio/sound.rs"
+
+[[example]]
+name = "sound2"
+path = "examples/esp32/audio/sound2.rs"
+
+[[example]]
+name = "sound3"
+path = "examples/esp32/audio/sound3.rs"
+
+[[example]]
+name = "wifi"
+path = "examples/esp32/network/wifi.rs"
+
+[[example]]
+name = "ws"
+path = "examples/esp32/network/ws.rs"
+
+[[example]]
+name = "test"
+path = "examples/esp32/experiments/test.rs"
+
+[[example]]
+name = "test2"
+path = "examples/esp32/experiments/test2.rs"
+
+[[example]]
+name = "test3"
+path = "examples/esp32/experiments/test3.rs"
+
+[[example]]
+name = "t4"
+path = "examples/esp32/experiments/t4.rs"
+
+[[example]]
+name = "timer"
+path = "examples/esp32/experiments/timer.rs"
+
+[[example]]
+name = "test4"
+path = "examples/esp32/async/test4.rs"
