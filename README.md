@@ -84,3 +84,16 @@ cargo run --example oled
 
 루트에서 `make esp32-check`, `make esp32-build`, `make espidf-check`, `make espidf-build`를 실행한다.
 먼저 `. ~/export-esp.sh`를 적용한다. 기존 루트 Rust 프로젝트는 유지한다.
+
+
+- [ESP32-S3 Quick Start](https://wikidocs.net/book/14519)
+  - ESP32-S3 개발 보드
+  - Arduino IDE, VSCode, PlatformIO
+  - ESP32 개발환경과 기본 실습
+  - 일부 내용 작성 중
+
+- [로보틱스를 위한 아두이노 로봇 제어](https://wikidocs.net/book/18975)
+  - Arduino, ESP32, 센서, 모터 제어
+  - GPIO, PWM, UART, I2C, 인터럽트
+  - ESP32 Bluetooth, Socket, WebSocket, Web Server
+  - PID, 엔코더, 센서 융합
