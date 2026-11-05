@@ -31,6 +31,7 @@ cargo run --example led_blink
 | `t4` | [esp32/experiments/t4.rs ](esp32/experiments/t4.rs) |
 | `timer` | [esp32/experiments/timer.rs ](esp32/experiments/timer.rs) |
 | `test4` | [esp32/async/test4.rs ](esp32/async/test4.rs) |
+| `uart2_stm32_bridge` | [esp32/serial/uart2_stm32_bridge.rs](esp32/serial/uart2_stm32_bridge.rs) |
 
 `experiments/`는 기존 번호별 실험 코드다. 핀과 연결 장치는 각 소스를 확인한다.
 모든 예제의 실물 동작을 일괄 검증한 것은 아니다.

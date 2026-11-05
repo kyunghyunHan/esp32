@@ -130,3 +130,7 @@ path = "examples/esp32/experiments/timer.rs"
 [[example]]
 name = "test4"
 path = "examples/esp32/async/test4.rs"
+
+[[example]]
+name = "uart2_stm32_bridge"
+path = "examples/esp32/serial/uart2_stm32_bridge.rs"
